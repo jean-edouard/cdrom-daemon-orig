@@ -47,6 +47,8 @@ main() {
     return 1;
   }
 
+  /* TODO: list existing vbds */
+
   /* Main loop */
   while (1) {
     /* Check dbus */
@@ -58,6 +60,7 @@ main() {
     nfds = xcdbus_pre_select(g_xcbus, 0, &readfds, &writefds, &exceptfds);
     select(nfds, &readfds, &writefds, &exceptfds, &tv);
     xcdbus_post_select(g_xcbus, 0, &readfds, &writefds, &exceptfds);
+    /* TODO: watch xenstore for new (domains and) vbds */
   }
 
   return ret;

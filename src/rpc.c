@@ -106,10 +106,20 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
     }
   }
 
-  /* TODO: load the new iso */
+  /* TODO: if IN_PATH is an empty string, we're done. */
+
+  /* TODO: load the new iso. If the tapdev is used by another VM, create a new one. */
+  /* If nothing uses the tapdev, close it and open the new file. */
+  /* Finally, write the tapdev params (path) and type (== phy) to xenstore. */
+  /* In a CLI, it looks like: */
   /* tap-ctl close [...] */
   /* tap-ctl open -p 2139 -m 5 -a aio:/storage/isos/xc-tools.iso */
   /* xenstore-write /local/domain/0/backend/vbd/4/5632/params "/dev/xen/blktap-2/tapdev5" ; xenstore-write local/domain/0/backend/vbd/4/5632/type "aio" */
+
+  /* Note: things would be easier if we were in charge of creating the cdroms vdevs in the first place. */
+  /* With the current way of doing things, we could have a race... */
+  /* e.g.: VM A (started) and VM B (off) both use the same iso. */
+  /* VM B starts while we're changing the iso on VM A, we destroy the tapdisk and VM B will have the wrong iso. */
 
   return TRUE;
 }
