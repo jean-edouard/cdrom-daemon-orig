@@ -67,5 +67,49 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
 				 gint IN_domid,
 				 GError** error)
 {
+  /* tap_list_t tap; */
+  char xpath[256], **devs, *type;
+  int domid = IN_domid;
+  unsigned int count, i;
+  int id = 0;
+  xs_transaction_t trans;
+
+  /* Find the CDROM virtual device for the give domid */
+  snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d", domid);
+  devs = xs_directory(xs_handle, XBT_NULL, xpath, &count);
+  if (devs) {
+    for (i = 0; i < count; ++i) {
+      snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%s/device-type", domid, devs[i]);
+      type = xs_read(xs_handle, XBT_NULL, xpath, NULL);
+      if (type != NULL && !strcmp(type, "cdrom")) {
+	/* CDROM found! */
+	id = strtol(devs[i], NULL, 10);
+	break;
+      }
+    }
+    free(devs);
+  }
+  if (id == 0)
+    return FALSE;
+
+  /* Eject the disk */
+  while (1) {
+    trans = xs_transaction_start(xs_handle);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, id);
+    xs_write(xs_handle, trans, xpath, "", 0);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, id);
+    xs_write(xs_handle, trans, xpath, "", 0);
+    if (xs_transaction_end(xs_handle, trans, false) == false) {
+      if (errno == EAGAIN)
+	continue;
+      break;
+    }
+  }
+
+  /* TODO: load the new iso */
+  /* tap-ctl close [...] */
+  /* tap-ctl open -p 2139 -m 5 -a aio:/storage/isos/xc-tools.iso */
+  /* xenstore-write /local/domain/0/backend/vbd/4/5632/params "/dev/xen/blktap-2/tapdev5" ; xenstore-write local/domain/0/backend/vbd/4/5632/type "aio" */
+
   return TRUE;
 }

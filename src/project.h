@@ -71,6 +71,8 @@
 #include <syslog.h>
 #include <xenstore.h>
 
+#include <tap-ctl.h>
+
 /* CDROM_DAEMON dbus object implementation */
 #include "rpcgen/cdrom_daemon_server_obj.h"
 

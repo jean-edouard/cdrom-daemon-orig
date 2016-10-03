@@ -32,7 +32,7 @@ cdrom_daemon_SOURCES = ${PROTO_SRCS} rpcgen/cdrom_daemon_server_obj.c
 
 # Add -lusb-1.0 for a decent usb lib
 # Add @LIBXCXENSTORE_LIBS@ for libxcxenstore
-cdrom_daemon_LDADD = @DBUS_LIBS@ @DBUS_GLIB_LIBS@ @LIBXCDBUS_LIBS@ -lxenstore
+cdrom_daemon_LDADD = @DBUS_LIBS@ @DBUS_GLIB_LIBS@ @LIBXCDBUS_LIBS@ -lblktapctl -lxenstore
 
 BUILT_SOURCES = \
         ${DBUS_CLIENT_IDLS:%=rpcgen/%_client.h} \

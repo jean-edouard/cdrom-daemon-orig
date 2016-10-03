@@ -40,6 +40,13 @@ main() {
   /* Setup dbus */
   rpc_init();
 
+  /* Setup xenstore */
+  xs_handle = xs_daemon_open();
+  if (xs_handle == NULL) {
+    log(LOG_ERR, "Failed to connect to xenstore");
+    return 1;
+  }
+
   /* Main loop */
   while (1) {
     /* Check dbus */
