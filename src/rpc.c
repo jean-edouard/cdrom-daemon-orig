@@ -92,10 +92,10 @@ static int cdrom_tap_minor_of_vdev(int domid, int vdev)
   char xpath[256], *tmp;
   int tap_minor = -1;
 
-  snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/minor", domid, vdev);
+  snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
   tmp = xs_read(xs_handle, XBT_NULL, xpath, NULL);
   if (tmp != NULL)
-    tap_minor = strtol(tmp, NULL, 10);
+    tap_minor = strtol(tmp + 24, NULL, 10);
 
   return tap_minor;
 }
@@ -140,22 +140,23 @@ static void cdrom_change(int domid, int vdev, char *params, char *type)
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
-      break;
     }
+    break;
   }
 }
 
 static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool close)
 {
-  tap_list_t **list, *tap = NULL;
-  int count, i;
+  tap_list_t **list, **tmp, *tap = NULL;
 
-  count = tap_ctl_list(&list);
-  for (i = 0; i < count; ++i) {
-    if ((list[i])->minor == tap_minor) {
-      tap = list[i];
+  tap_ctl_list(&list);
+  tmp = list;
+  while(*tmp != NULL) {
+    if ((*tmp)->minor == tap_minor) {
+      tap = *tmp;
       break;
     }
+    tmp++;
   }
   if (tap == NULL)
     return false;
@@ -173,7 +174,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
 				 GError** error)
 {
   int tap_minor, count, vdev;
-  char params[256], *new_tpath;
+  char params[256], ppath[256], *new_tpath = NULL;
 
   /* Get the virtual cdrom vdev and tap minor for the domid */
   vdev = cdrom_vdev_of_domid(IN_domid);
@@ -190,27 +191,30 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
   if (*IN_path == '\0')
     return TRUE;
 
-  /* See if there's more than 1 domid (us) using the tapdev */
-  count = cdrom_count_and_print(tap_minor, 2, true);
+  /* See if there's other guests using the tapdev (we already ejected it) */
+  count = cdrom_count_and_print(tap_minor, 1, true);
 
   /* This should never happen */
-  if (count <= 0) {
+  if (count < 0) {
     printf("wha?!\n");
     return FALSE;
   }
 
+  /* TODO: is there already a tapdev for that iso?? */
+
   /* Insert the new iso */
   snprintf(params, sizeof(params), "aio:/dev/xen/blktap-2/tapdev%d", tap_minor);
-  if (count == 1) {
+  if (count == 0) {
     /* We're the only one to use it, we can reuse the tapdev */
     if (cdrom_tap_close_and_load(tap_minor, IN_path, true))
       cdrom_change(IN_domid, vdev, params, "phy");
   } else {
+    snprintf(ppath, sizeof(ppath), "aio:%s", IN_path);
     /* We need to create a new tapdev */
-    tap_ctl_create(params, &new_tpath);
-    tap_minor = strtol(params + 28, NULL, 10);
-    if (cdrom_tap_close_and_load(tap_minor, IN_path, false))
-      cdrom_change(IN_domid, vdev, params, "phy");
+    if (tap_ctl_create_flags(ppath, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
+      printf("tap_ctl_create_flags failed!!");
+    tap_minor = strtol(new_tpath + 24, NULL, 10);
+    cdrom_change(IN_domid, vdev, new_tpath, "phy");
   }
 
   return TRUE;
