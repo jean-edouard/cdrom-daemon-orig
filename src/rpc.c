@@ -62,19 +62,13 @@ void rpc_init(void)
   }
 }
 
-gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
-				 const char* IN_path,
-				 gint IN_domid,
-				 GError** error)
+static int cdrom_vdev_of_domid(int domid)
 {
-  /* tap_list_t tap; */
   char xpath[256], **devs, *type;
-  int domid = IN_domid;
-  unsigned int count, i;
-  int id = 0;
-  xs_transaction_t trans;
+  unsigned int i, count;
+  int vdev = -1;
 
-  /* Find the CDROM virtual device for the give domid */
+  /* Find the CDROM virtual device for the given domid */
   snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d", domid);
   devs = xs_directory(xs_handle, XBT_NULL, xpath, &count);
   if (devs) {
@@ -83,43 +77,141 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
       type = xs_read(xs_handle, XBT_NULL, xpath, NULL);
       if (type != NULL && !strcmp(type, "cdrom")) {
 	/* CDROM found! */
-	id = strtol(devs[i], NULL, 10);
+	vdev = strtol(devs[i], NULL, 10);
 	break;
       }
     }
     free(devs);
   }
-  if (id == 0)
-    return FALSE;
 
-  /* Eject the disk */
+  return vdev;
+}
+
+static int cdrom_tap_minor_of_vdev(int domid, int vdev)
+{
+  char xpath[256], *tmp;
+  int tap_minor = -1;
+
+  snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/minor", domid, vdev);
+  tmp = xs_read(xs_handle, XBT_NULL, xpath, NULL);
+  if (tmp != NULL)
+    tap_minor = strtol(tmp, NULL, 10);
+
+  return tap_minor;
+}
+
+static int cdrom_count_and_print(int tap_minor, int max, bool print)
+{
+  char **domids;
+  unsigned int i, count;
+  int tm, domid;
+  int res = 0;
+
+  /* Find the CDROM virtual device for the given domid */
+  domids = xs_directory(xs_handle, XBT_NULL, "/local/domain/0/backend/vbd", &count);
+  if (domids) {
+    for (i = 0; i < count; ++i) {
+      domid = strtol(domids[i], NULL, 10);
+      tm = cdrom_tap_minor_of_vdev(domid, cdrom_vdev_of_domid(domid));
+      if (print)
+	printf("CDROM for domid %d: %d\n", domid, tm);
+      if (tm == tap_minor)
+	res++;
+      if (res >= max)
+	break;
+    }
+  }
+  free(domids);
+
+  return res;
+}
+
+static void cdrom_change(int domid, int vdev, char *params, char *type)
+{
+  char xpath[256];
+  xs_transaction_t trans;
+
   while (1) {
     trans = xs_transaction_start(xs_handle);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, id);
-    xs_write(xs_handle, trans, xpath, "", 0);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, id);
-    xs_write(xs_handle, trans, xpath, "", 0);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
+    xs_write(xs_handle, trans, xpath, params, 0);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, vdev);
+    xs_write(xs_handle, trans, xpath, type, 0);
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
       break;
     }
   }
+}
 
-  /* TODO: if IN_PATH is an empty string, we're done. */
+static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool close)
+{
+  tap_list_t **list, *tap = NULL;
+  int count, i;
 
-  /* TODO: load the new iso. If the tapdev is used by another VM, create a new one. */
-  /* If nothing uses the tapdev, close it and open the new file. */
-  /* Finally, write the tapdev params (path) and type (== phy) to xenstore. */
-  /* In a CLI, it looks like: */
-  /* tap-ctl close [...] */
-  /* tap-ctl open -p 2139 -m 5 -a aio:/storage/isos/xc-tools.iso */
-  /* xenstore-write /local/domain/0/backend/vbd/4/5632/params "/dev/xen/blktap-2/tapdev5" ; xenstore-write local/domain/0/backend/vbd/4/5632/type "aio" */
+  count = tap_ctl_list(&list);
+  for (i = 0; i < count; ++i) {
+    if ((list[i])->minor == tap_minor) {
+      tap = list[i];
+      break;
+    }
+  }
+  if (tap == NULL)
+    return false;
+  if (close)
+    tap_ctl_close(tap->id, tap_minor, 1);
+  tap_ctl_open(tap->id, tap_minor, params);
+  tap_ctl_free_list(list);
 
-  /* Note: things would be easier if we were in charge of creating the cdroms vdevs in the first place. */
-  /* With the current way of doing things, we could have a race... */
-  /* e.g.: VM A (started) and VM B (off) both use the same iso. */
-  /* VM B starts while we're changing the iso on VM A, we destroy the tapdisk and VM B will have the wrong iso. */
+  return true;
+}
+
+gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
+				 const char* IN_path,
+				 gint IN_domid,
+				 GError** error)
+{
+  int tap_minor, count, vdev;
+  char params[256], *new_tpath;
+
+  /* Get the virtual cdrom vdev and tap minor for the domid */
+  vdev = cdrom_vdev_of_domid(IN_domid);
+  tap_minor = cdrom_tap_minor_of_vdev(IN_domid, vdev);
+
+  /* If we don't have a virtual drive, fail. */
+  if (tap_minor < 0)
+    return FALSE;
+
+  /* Eject the disk */
+  cdrom_change(IN_domid, vdev, "", "");
+
+  /* If the path is the empty string we're done. */
+  if (*IN_path == '\0')
+    return TRUE;
+
+  /* See if there's more than 1 domid (us) using the tapdev */
+  count = cdrom_count_and_print(tap_minor, 2, true);
+
+  /* This should never happen */
+  if (count <= 0) {
+    printf("wha?!\n");
+    return FALSE;
+  }
+
+  /* Insert the new iso */
+  snprintf(params, sizeof(params), "aio:/dev/xen/blktap-2/tapdev%d", tap_minor);
+  if (count == 1) {
+    /* We're the only one to use it, we can reuse the tapdev */
+    if (cdrom_tap_close_and_load(tap_minor, IN_path, true))
+      cdrom_change(IN_domid, vdev, params, "phy");
+  } else {
+    /* We need to create a new tapdev */
+    tap_ctl_create(params, &new_tpath);
+    tap_minor = strtol(params + 28, NULL, 10);
+    if (cdrom_tap_close_and_load(tap_minor, IN_path, false))
+      cdrom_change(IN_domid, vdev, params, "phy");
+  }
 
   return TRUE;
 }
