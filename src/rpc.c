@@ -126,7 +126,7 @@ static int cdrom_count_and_print(int tap_minor, int max, bool print)
   return res;
 }
 
-static void cdrom_change(int domid, int vdev, char *params, char *type)
+static void cdrom_change(int domid, int vdev, char *params, char *type, char *new_physical)
 {
   char xpath[256];
   xs_transaction_t trans;
@@ -134,9 +134,13 @@ static void cdrom_change(int domid, int vdev, char *params, char *type)
   while (1) {
     trans = xs_transaction_start(xs_handle);
     snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
-    xs_write(xs_handle, trans, xpath, params, 0);
+    xs_write(xs_handle, trans, xpath, params, strlen(params));
     snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, vdev);
-    xs_write(xs_handle, trans, xpath, type, 0);
+    xs_write(xs_handle, trans, xpath, type, strlen(type));
+    if (new_physical != NULL) {
+      snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/physical-device", domid, vdev);
+      xs_write(xs_handle, trans, xpath, new_physical, strlen(new_physical));
+    }
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
@@ -174,7 +178,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
 				 GError** error)
 {
   int tap_minor, count, vdev;
-  char params[256], ppath[256], *new_tpath = NULL;
+  char params[128], ppath[256], phys[16], *new_tpath = NULL;
 
   /* Get the virtual cdrom vdev and tap minor for the domid */
   vdev = cdrom_vdev_of_domid(IN_domid);
@@ -185,7 +189,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
     return FALSE;
 
   /* Eject the disk */
-  cdrom_change(IN_domid, vdev, "", "");
+  cdrom_change(IN_domid, vdev, "", "", NULL);
 
   /* If the path is the empty string we're done. */
   if (*IN_path == '\0')
@@ -207,14 +211,15 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
   if (count == 0) {
     /* We're the only one to use it, we can reuse the tapdev */
     if (cdrom_tap_close_and_load(tap_minor, IN_path, true))
-      cdrom_change(IN_domid, vdev, params, "phy");
+      cdrom_change(IN_domid, vdev, params, "phy", NULL);
   } else {
     snprintf(ppath, sizeof(ppath), "aio:%s", IN_path);
     /* We need to create a new tapdev */
     if (tap_ctl_create_flags(ppath, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
       printf("tap_ctl_create_flags failed!!");
     tap_minor = strtol(new_tpath + 24, NULL, 10);
-    cdrom_change(IN_domid, vdev, new_tpath, "phy");
+    snprintf(phys, sizeof(phys), "fe:%d", tap_minor);
+    cdrom_change(IN_domid, vdev, new_tpath, "phy", phys);
   }
 
   return TRUE;
