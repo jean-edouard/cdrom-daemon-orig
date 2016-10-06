@@ -73,11 +73,10 @@ static int cdrom_vdev_of_domid(int domid)
   devs = xs_directory(xs_handle, XBT_NULL, xpath, &count);
   if (devs) {
     for (i = 0; i < count; ++i) {
-      snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%s/device-type", domid, devs[i]);
-      type = xs_read(xs_handle, XBT_NULL, xpath, NULL);
+      vdev = strtol(devs[i], NULL, 10);
+      type = xenstore_be_read(XBT_NULL, domid, vdev, "device-type");
       if (type != NULL && !strcmp(type, "cdrom")) {
 	/* CDROM found! */
-	vdev = strtol(devs[i], NULL, 10);
 	break;
       }
     }
@@ -89,11 +88,10 @@ static int cdrom_vdev_of_domid(int domid)
 
 static int cdrom_tap_minor_of_vdev(int domid, int vdev)
 {
-  char xpath[256], *tmp;
+  char *tmp;
   int tap_minor = -1;
 
-  snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
-  tmp = xs_read(xs_handle, XBT_NULL, xpath, NULL);
+  tmp = xenstore_be_read(XBT_NULL, domid, vdev, "params");
   if (tmp != NULL)
     tap_minor = strtol(tmp + 24, NULL, 10);
 
@@ -128,19 +126,15 @@ static int cdrom_count_and_print(int tap_minor, int max, bool print)
 
 static void recreate(int domid, int vdev, char *params, char *type, char *physical)
 {
-  char xpath[256], val[256];
   xs_transaction_t trans;
-  struct xs_permissions perms[2];
 
   /* Kill the current vdev */
   while (1) {
     trans = xs_transaction_start(xs_handle);
-    /* snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/state", domid, vdev); */
-    /* xs_write(xs_handle, trans, xpath, "5", 1); */
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/online", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "0", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/state", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "5", 1);
+
+    xenstore_be_write(trans, domid, vdev, "online", "0");
+    xenstore_be_write(trans, domid, vdev, "state",  "5");
+
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
@@ -148,15 +142,15 @@ static void recreate(int domid, int vdev, char *params, char *type, char *physic
     break;
   }
 
-  sleep(1);
+  sleep(1); /* TODO: should be a watch for states to go to 6 */
 
   /* Remove all traces of the vdev */
   while (1) {
     trans = xs_transaction_start(xs_handle);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
-    xs_rm(xs_handle, trans, xpath);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d", domid, vdev);
-    xs_rm(xs_handle, trans, xpath);
+
+    xenstore_be_destroy(trans, domid, vdev);
+    xenstore_fe_destroy(trans, domid, vdev);
+
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
@@ -167,56 +161,28 @@ static void recreate(int domid, int vdev, char *params, char *type, char *physic
   /* Create a new vdev based on $params and $physical */
   while (1) {
     trans = xs_transaction_start(xs_handle);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
-    xs_mkdir(xs_handle, trans, xpath);
-    perms[0].id = 0;
-    perms[0].perms = XS_PERM_NONE;
-    perms[1].id = domid;
-    perms[1].perms = XS_PERM_READ;
-    xs_set_permissions(xs_handle, trans, xpath, perms, 2);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
-    xs_write(xs_handle, trans, xpath, params, strlen(params));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, vdev);
-    xs_write(xs_handle, trans, xpath, type, strlen(type));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/physical-device", domid, vdev);
-    xs_write(xs_handle, trans, xpath, physical, strlen(physical));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/frontend", domid, vdev);
-    snprintf(val, sizeof(val), "/local/domain/%d/device/vbd/%d", domid, vdev);
-    xs_write(xs_handle, trans, xpath, val, strlen(val));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/online", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "1", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/state", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "1", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/removable", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "1", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/mode", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "r", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/frontend-id", domid, vdev);
-    snprintf(val, sizeof(val), "%d", domid);
-    xs_write(xs_handle, trans, xpath, val, strlen(val));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/dev", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "hdc", 3);
 
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d", domid, vdev);
-    xs_mkdir(xs_handle, trans, xpath);
-    perms[0].id = domid;
-    perms[0].perms = XS_PERM_NONE;
-    perms[1].id = 0;
-    perms[1].perms = XS_PERM_READ;
-    xs_set_permissions(xs_handle, trans, xpath, perms, 2);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/state", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "1", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend-id", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "0", 1);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend", domid, vdev);
-    snprintf(val, sizeof(val), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
-    xs_write(xs_handle, trans, xpath, val, strlen(val));
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/virtual-device", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "5632", 4);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/device-type", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "cdrom", 5);
-    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend-uuid", domid, vdev);
-    xs_write(xs_handle, trans, xpath, "00000000-0000-0000-0000-000000000000", 36);
+    xenstore_mkdir_with_perms(trans, 0, domid, VBD_BACKEND_FORMAT, domid, vdev);
+    xenstore_be_write(trans, domid, vdev, "params",          params);
+    xenstore_be_write(trans, domid, vdev, "type",            type);
+    xenstore_be_write(trans, domid, vdev, "physical-device", physical);
+    xenstore_be_write(trans, domid, vdev, "frontend",        VBD_FRONTEND_FORMAT, domid, vdev);
+    xenstore_be_write(trans, domid, vdev, "device-type",     "cdrom");
+    xenstore_be_write(trans, domid, vdev, "online",          "1");
+    xenstore_be_write(trans, domid, vdev, "state",           "1");
+    xenstore_be_write(trans, domid, vdev, "removable",       "1");
+    xenstore_be_write(trans, domid, vdev, "mode",            "r");
+    xenstore_be_write(trans, domid, vdev, "frontend-id",     "%d", domid);
+    xenstore_be_write(trans, domid, vdev, "dev",             "hdc");
+
+    xenstore_mkdir_with_perms(trans, domid, 0, VBD_FRONTEND_FORMAT, domid, vdev);
+    xenstore_fe_write(trans, domid, vdev, "state",           "1");
+    xenstore_fe_write(trans, domid, vdev, "backend-id",      "0");
+    xenstore_fe_write(trans, domid, vdev, "backend",         VBD_BACKEND_FORMAT, domid, vdev);
+    xenstore_fe_write(trans, domid, vdev, "virtual-device",  "%d", vdev);
+    xenstore_fe_write(trans, domid, vdev, "device-type",     "cdrom");
+    xenstore_fe_write(trans, domid, vdev, "backend-uuid",    "00000000-0000-0000-0000-000000000000");
+
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
@@ -227,19 +193,16 @@ static void recreate(int domid, int vdev, char *params, char *type, char *physic
 
 static void cdrom_change(int domid, int vdev, char *params, char *type, char *new_physical)
 {
-  char xpath[256];
   xs_transaction_t trans;
 
   while (1) {
     trans = xs_transaction_start(xs_handle);
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
-    xs_write(xs_handle, trans, xpath, params, strlen(params));
-    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, vdev);
-    xs_write(xs_handle, trans, xpath, type, strlen(type));
-    if (new_physical != NULL) {
-      snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/physical-device", domid, vdev);
-      xs_write(xs_handle, trans, xpath, new_physical, strlen(new_physical));
-    }
+
+    xenstore_be_write(trans, domid, vdev, "params", params);
+    xenstore_be_write(trans, domid, vdev, "type",   type);
+    if (new_physical != NULL)
+      xenstore_be_write(trans, domid, vdev, "physical-device", new_physical);
+
     if (xs_transaction_end(xs_handle, trans, false) == false) {
       if (errno == EAGAIN)
 	continue;
@@ -271,6 +234,18 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
   return true;
 }
 
+/*
+ * There are 3 possible cases here:
+ * - There is already a tapdev for the iso we're trying to switch to
+ *   In which case destroy the blktap and recreate one pointing to that tapdev
+ *   (tapdev hotplug is explicitely not supported)
+ * - IN_domid is the only one to use the iso
+ *   (the only one whose blktap is linked to the tapdev that contains its iso)
+ *   In which case we change the iso for that tapdev
+ * - IN_domid shares the iso with another running guest
+ *   In which case we create a new tapdev, destroy the blktap and recreate one
+ *     pointing to the new iso. (tapdev hotplug is explicitely not supported)
+ */
 gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
 				 const char* IN_path,
 				 gint IN_domid,

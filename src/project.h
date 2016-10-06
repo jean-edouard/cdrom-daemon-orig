@@ -79,18 +79,34 @@
 #define CDROMDAEMON     "com.citrix.xenclient.cdromdaemon" /**< The dbus name of cdrom daemon */
 #define CDROMDAEMON_OBJ "/"                         /**< The main dbus object of cdrom daemon */
 
+#define VBD_BACKEND_FORMAT  "/local/domain/0/backend/vbd/%d/%d"
+#define VBD_FRONTEND_FORMAT "/local/domain/%d/device/vbd/%d"
+
 /**
  * The (stupid) logging macro
  */
 #define log(I, ...) do { fprintf(stderr, ##__VA_ARGS__); fprintf(stderr, "\n"); } while (0)
 
 enum XenBusStates {
-  XB_UNKNOWN, XB_INITTING, XB_INITWAIT, XB_INITTED, XB_CONNECTED,
-  XB_CLOSING, XB_CLOSED
+  XB_UNKNOWN,
+  XB_INITTING,
+  XB_INITWAIT,
+  XB_INITTED,
+  XB_CONNECTED,
+  XB_CLOSING,
+  XB_CLOSED
 };
 
 struct xs_handle *xs_handle; /**< The global xenstore handle, initialized by xenstore_init() */
 xcdbus_conn_t *g_xcbus;      /**< The global dbus (libxcdbus) handle, initialized by rpc_init() */
+
+bool  xenstore_be_write(xs_transaction_t trans, int domid, int vdev, char *node, const char *value, ...);
+bool  xenstore_fe_write(xs_transaction_t trans, int domid, int vdev, char *node, const char *value, ...);
+char *xenstore_be_read(xs_transaction_t trans, int domid, int vdev, char *node);
+char *xenstore_fe_read(xs_transaction_t trans, int domid, int vdev, char *node);
+bool  xenstore_be_destroy(xs_transaction_t trans, int domid, int vdev);
+bool  xenstore_fe_destroy(xs_transaction_t trans, int domid, int vdev);
+bool  xenstore_mkdir_with_perms(xs_transaction_t trans, int owner, int reader, char *dir, ...);
 
 void rpc_init(void);
 
