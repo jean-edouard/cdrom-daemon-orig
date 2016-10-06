@@ -126,6 +126,105 @@ static int cdrom_count_and_print(int tap_minor, int max, bool print)
   return res;
 }
 
+static void recreate(int domid, int vdev, char *params, char *type, char *physical)
+{
+  char xpath[256], val[256];
+  xs_transaction_t trans;
+  struct xs_permissions perms[2];
+
+  /* Kill the current vdev */
+  while (1) {
+    trans = xs_transaction_start(xs_handle);
+    /* snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/state", domid, vdev); */
+    /* xs_write(xs_handle, trans, xpath, "5", 1); */
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/online", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "0", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/state", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "5", 1);
+    if (xs_transaction_end(xs_handle, trans, false) == false) {
+      if (errno == EAGAIN)
+	continue;
+    }
+    break;
+  }
+
+  sleep(1);
+
+  /* Remove all traces of the vdev */
+  while (1) {
+    trans = xs_transaction_start(xs_handle);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
+    xs_rm(xs_handle, trans, xpath);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d", domid, vdev);
+    xs_rm(xs_handle, trans, xpath);
+    if (xs_transaction_end(xs_handle, trans, false) == false) {
+      if (errno == EAGAIN)
+	continue;
+    }
+    break;
+  }
+
+  /* Create a new vdev based on $params and $physical */
+  while (1) {
+    trans = xs_transaction_start(xs_handle);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
+    xs_mkdir(xs_handle, trans, xpath);
+    perms[0].id = 0;
+    perms[0].perms = XS_PERM_NONE;
+    perms[1].id = domid;
+    perms[1].perms = XS_PERM_READ;
+    xs_set_permissions(xs_handle, trans, xpath, perms, 2);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/params", domid, vdev);
+    xs_write(xs_handle, trans, xpath, params, strlen(params));
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/type", domid, vdev);
+    xs_write(xs_handle, trans, xpath, type, strlen(type));
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/physical-device", domid, vdev);
+    xs_write(xs_handle, trans, xpath, physical, strlen(physical));
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/frontend", domid, vdev);
+    snprintf(val, sizeof(val), "/local/domain/%d/device/vbd/%d", domid, vdev);
+    xs_write(xs_handle, trans, xpath, val, strlen(val));
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/online", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "1", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/state", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "1", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/removable", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "1", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/mode", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "r", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/frontend-id", domid, vdev);
+    snprintf(val, sizeof(val), "%d", domid);
+    xs_write(xs_handle, trans, xpath, val, strlen(val));
+    snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d/%d/dev", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "hdc", 3);
+
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d", domid, vdev);
+    xs_mkdir(xs_handle, trans, xpath);
+    perms[0].id = domid;
+    perms[0].perms = XS_PERM_NONE;
+    perms[1].id = 0;
+    perms[1].perms = XS_PERM_READ;
+    xs_set_permissions(xs_handle, trans, xpath, perms, 2);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/state", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "1", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend-id", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "0", 1);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend", domid, vdev);
+    snprintf(val, sizeof(val), "/local/domain/0/backend/vbd/%d/%d", domid, vdev);
+    xs_write(xs_handle, trans, xpath, val, strlen(val));
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/virtual-device", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "5632", 4);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/device-type", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "cdrom", 5);
+    snprintf(xpath, sizeof(xpath), "/local/domain/%d/device/vbd/%d/backend-uuid", domid, vdev);
+    xs_write(xs_handle, trans, xpath, "00000000-0000-0000-0000-000000000000", 36);
+    if (xs_transaction_end(xs_handle, trans, false) == false) {
+      if (errno == EAGAIN)
+	continue;
+    }
+    break;
+  }
+}
+
 static void cdrom_change(int domid, int vdev, char *params, char *type, char *new_physical)
 {
   char xpath[256];
@@ -219,7 +318,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
       printf("tap_ctl_create_flags failed!!");
     tap_minor = strtol(new_tpath + 24, NULL, 10);
     snprintf(phys, sizeof(phys), "fe:%d", tap_minor);
-    cdrom_change(IN_domid, vdev, new_tpath, "phy", phys);
+    recreate(IN_domid, vdev, new_tpath, "phy", phys);
   }
 
   return TRUE;
