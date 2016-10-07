@@ -148,7 +148,13 @@ static void recreate(int domid, int vdev, const char *params, const char *type, 
     break;
   }
 
-  sleep(1); /* TODO: should be a watch for states to go to 6 */
+  /* TODO: should be a watch for states to go to 6 */
+  while (1) {
+    sleep(1);
+    if (!strcmp(xenstore_be_read(XBT_NULL, domid, vdev, "state"), "6") &&
+	!strcmp(xenstore_fe_read(XBT_NULL, domid, vdev, "state"), "6"))
+      break;
+  }
 
   /* Remove all traces of the vdev */
   while (1) {
@@ -237,7 +243,7 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
     /* The last argument should be != 0 for force, but it's not supported */
     printf("JED close %d\n", tap_ctl_close(tap->id, tap_minor, 0));
   }
-  printf("JED open %d\n", tap_ctl_open(tap->id, tap_minor, params));
+  printf("JED open %d\n", tap_ctl_open_flags(tap->id, tap_minor, params, TAPDISK_MESSAGE_FLAG_RDONLY));
   tap_ctl_free_list(list);
 
   return true;
@@ -350,14 +356,14 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
       return TRUE;
     }
 
+  snprintf(path, sizeof(path), "aio:%s", IN_path);
   if (count == 0) {
     /* 2. We're the only one to use it, we can reuse the tapdev */
-    if (cdrom_tap_close_and_load(tap_minor, IN_path, true)) {
-      printf("JED: closed and loaded %d %s\n", tap_minor, IN_path);
+    if (cdrom_tap_close_and_load(tap_minor, path, true)) {
+      printf("JED: closed and loaded %d %s\n", tap_minor, path);
       cdrom_change(IN_domid, vdev, IN_path, "phy", NULL);
     }
   } else {
-    snprintf(path, sizeof(path), "aio:%s", IN_path);
     /* 3. We need to create a new tapdev */
     if (tap_ctl_create_flags(path, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
       printf("tap_ctl_create_flags failed!!");
