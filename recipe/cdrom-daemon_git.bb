@@ -1,7 +1,7 @@
 DESCRIPTION = "CDROM Daemon for XenClient"
 LICENSE = "GPLv2"
 LIC_FILES_CHKSUM="file://COPYING;md5=4641e94ec96f98fabc56ff9cc48be14b"
-DEPENDS = "xen-tools libxcdbus xenclient-idl xenclient-rpcgen-native"
+DEPENDS = "xen-tools libxcdbus xenclient-idl xenclient-rpcgen-native xen-blktap"
 
 PV = "0+git${SRCPV}"
 
