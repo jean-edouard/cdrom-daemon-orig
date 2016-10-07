@@ -66,7 +66,7 @@ static int cdrom_vdev_of_domid(int domid)
 {
   char xpath[256], **devs, *type;
   unsigned int i, count;
-  int vdev = -1;
+  int vdev, res = -1;
 
   /* Find the CDROM virtual device for the given domid */
   snprintf(xpath, sizeof(xpath), "/local/domain/0/backend/vbd/%d", domid);
@@ -77,13 +77,14 @@ static int cdrom_vdev_of_domid(int domid)
       type = xenstore_be_read(XBT_NULL, domid, vdev, "device-type");
       if (type != NULL && !strcmp(type, "cdrom")) {
 	/* CDROM found! */
+	res = vdev;
 	break;
       }
     }
     free(devs);
   }
 
-  return vdev;
+  return res;
 }
 
 static int cdrom_tap_minor_of_vdev(int domid, int vdev)
@@ -91,7 +92,12 @@ static int cdrom_tap_minor_of_vdev(int domid, int vdev)
   char *tmp;
   int tap_minor = -1;
 
+  if (vdev < 0)
+    return -1;
+
   tmp = xenstore_be_read(XBT_NULL, domid, vdev, "params");
+  if (tmp != NULL)
+    printf("JED: params = %s, +24: %ld\n", tmp, strtol(tmp + 24, NULL, 10));
   if (tmp != NULL)
     tap_minor = strtol(tmp + 24, NULL, 10);
 
@@ -124,7 +130,7 @@ static int cdrom_count_and_print(int tap_minor, int max, bool print)
   return res;
 }
 
-static void recreate(int domid, int vdev, char *params, char *type, char *physical)
+static void recreate(int domid, int vdev, const char *params, const char *type, const char *physical)
 {
   xs_transaction_t trans;
 
@@ -191,7 +197,7 @@ static void recreate(int domid, int vdev, char *params, char *type, char *physic
   }
 }
 
-static void cdrom_change(int domid, int vdev, char *params, char *type, char *new_physical)
+static void cdrom_change(int domid, int vdev, const char *params, const char *type, const char *new_physical)
 {
   xs_transaction_t trans;
 
@@ -218,6 +224,7 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
   tap_ctl_list(&list);
   tmp = list;
   while(*tmp != NULL) {
+    printf("JED: trying %d vs %d\n", (*tmp)->minor, tap_minor);
     if ((*tmp)->minor == tap_minor) {
       tap = *tmp;
       break;
@@ -226,24 +233,72 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
   }
   if (tap == NULL)
     return false;
-  if (close)
-    tap_ctl_close(tap->id, tap_minor, 1);
-  tap_ctl_open(tap->id, tap_minor, params);
+  if (close) {
+    /* The last argument should be != 0 for force, but it's not supported */
+    printf("JED close %d\n", tap_ctl_close(tap->id, tap_minor, 0));
+  }
+  printf("JED open %d\n", tap_ctl_open(tap->id, tap_minor, params));
   tap_ctl_free_list(list);
 
   return true;
 }
 
+static bool cdrom_tap_destroy(int tap_minor)
+{
+  tap_list_t **list, **tmp, *tap = NULL;
+
+  tap_ctl_list(&list);
+  tmp = list;
+  while(*tmp != NULL) {
+    printf("JED: trying %d vs %d\n", (*tmp)->minor, tap_minor);
+    if ((*tmp)->minor == tap_minor) {
+      tap = *tmp;
+      break;
+    }
+    tmp++;
+  }
+  if (tap == NULL)
+    return false;
+  printf("JED destroy %d\n", tap_ctl_destroy(tap->id, tap_minor));
+  tap_ctl_free_list(list);
+
+  return true;
+}
+
+static int find_tap_with_path(const char *path)
+{
+  tap_list_t **list, **tmp, *tap = NULL;
+  int minor = -1;
+
+  tap_ctl_list(&list);
+  tmp = list;
+  /* A closed tapdev will have a NULL path */
+  while(*tmp != NULL && (*tmp)->path != NULL) {
+    if (!strcmp((*tmp)->path, path)) {
+      /* We found a tapdev, we can just use it and be done with it */
+      tap = *tmp;
+      break;
+    }
+    tmp++;
+  }
+  if (tap != NULL)
+    minor = tap->minor;
+  tap_ctl_free_list(list);
+
+  return minor;
+}
+
 /*
  * There are 3 possible cases here:
- * - There is already a tapdev for the iso we're trying to switch to
- *   In which case destroy the blktap and recreate one pointing to that tapdev
- *   (tapdev hotplug is explicitely not supported)
- * - IN_domid is the only one to use the iso
- *   (the only one whose blktap is linked to the tapdev that contains its iso)
- *   In which case we change the iso for that tapdev
- * - IN_domid shares the iso with another running guest
- *   In which case we create a new tapdev, destroy the blktap and recreate one
+ * 1. There is already a tapdev for the iso we're trying to switch to
+ *    In which case destroy the blktap and recreate one pointing to that tapdev
+ *    (tapdev hotplug is explicitely not supported),
+ *    and maybe destroy our old tapdev
+ * 2. IN_domid is the only one to use the iso
+ *    (the only one whose blktap is linked to the tapdev that contains its iso)
+ *    In which case we change the iso for that tapdev
+ * 3. IN_domid shares the iso with another running guest
+ *    In which case we create a new tapdev, destroy the blktap and recreate one
  *     pointing to the new iso. (tapdev hotplug is explicitely not supported)
  */
 gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
@@ -251,8 +306,8 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
 				 gint IN_domid,
 				 GError** error)
 {
-  int tap_minor, count, vdev;
-  char params[128], ppath[256], phys[16], *new_tpath = NULL;
+  int tap_minor, count, vdev, existing;
+  char path[256], phys[16], *new_tpath = NULL;
 
   /* Get the virtual cdrom vdev and tap minor for the domid */
   vdev = cdrom_vdev_of_domid(IN_domid);
@@ -277,19 +332,34 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
     printf("wha?!\n");
     return FALSE;
   }
+  printf("JED: count for %d: %d\n", tap_minor, count);
 
-  /* TODO: is there already a tapdev for that iso?? */
+  /* Inserting the new iso */
 
-  /* Insert the new iso */
-  snprintf(params, sizeof(params), "aio:/dev/xen/blktap-2/tapdev%d", tap_minor);
+  /* 1.: is there already a tapdev for that iso?? */
+  existing = find_tap_with_path(IN_path);
+  if (existing >= 0)
+    {
+      /* Destroy previous tapdev? */
+      if (count == 0)
+	cdrom_tap_destroy(tap_minor);
+      /* Switch to the one we just found */
+      snprintf(path, sizeof(path), "/dev/xen/blktap-2/tapdev%d", existing);
+      snprintf(phys, sizeof(phys), "fe:%d", existing);
+      recreate(IN_domid, vdev, path, "phy", phys);
+      return TRUE;
+    }
+
   if (count == 0) {
-    /* We're the only one to use it, we can reuse the tapdev */
-    if (cdrom_tap_close_and_load(tap_minor, IN_path, true))
-      cdrom_change(IN_domid, vdev, params, "phy", NULL);
+    /* 2. We're the only one to use it, we can reuse the tapdev */
+    if (cdrom_tap_close_and_load(tap_minor, IN_path, true)) {
+      printf("JED: closed and loaded %d %s\n", tap_minor, IN_path);
+      cdrom_change(IN_domid, vdev, IN_path, "phy", NULL);
+    }
   } else {
-    snprintf(ppath, sizeof(ppath), "aio:%s", IN_path);
-    /* We need to create a new tapdev */
-    if (tap_ctl_create_flags(ppath, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
+    snprintf(path, sizeof(path), "aio:%s", IN_path);
+    /* 3. We need to create a new tapdev */
+    if (tap_ctl_create_flags(path, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
       printf("tap_ctl_create_flags failed!!");
     tap_minor = strtol(new_tpath + 24, NULL, 10);
     snprintf(phys, sizeof(phys), "fe:%d", tap_minor);

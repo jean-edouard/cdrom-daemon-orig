@@ -32,9 +32,6 @@ static bool xenstore_write(xs_transaction_t trans, char *path, const char *value
 {
   char val[256];
 
-  printf("JED2 %s:", value);
-  vprintf(value, args);
-  printf("\n");
   vsnprintf(val, sizeof(val), value, args);
 
   return xs_write(xs_handle, trans, path, val, strlen(val));
@@ -49,9 +46,6 @@ bool xenstore_be_write(xs_transaction_t trans, int domid, int vdev, char *node, 
   snprintf(path, sizeof(path), VBD_BACKEND_FORMAT "/%s", domid, vdev, node);
 
   va_start(args, value);
-  printf("JED1 %s:", value);
-  vprintf(value, args);
-  printf("\n");
   res = xenstore_write(trans, path, value, args);
   va_end(args);
 
