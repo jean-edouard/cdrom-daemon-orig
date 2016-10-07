@@ -97,8 +97,6 @@ static int cdrom_tap_minor_of_vdev(int domid, int vdev)
 
   tmp = xenstore_be_read(XBT_NULL, domid, vdev, "params");
   if (tmp != NULL)
-    printf("JED: params = %s, +24: %ld\n", tmp, strtol(tmp + 24, NULL, 10));
-  if (tmp != NULL)
     tap_minor = strtol(tmp + 24, NULL, 10);
 
   return tap_minor;
@@ -230,7 +228,6 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
   tap_ctl_list(&list);
   tmp = list;
   while(*tmp != NULL) {
-    printf("JED: trying %d vs %d\n", (*tmp)->minor, tap_minor);
     if ((*tmp)->minor == tap_minor) {
       tap = *tmp;
       break;
@@ -241,9 +238,9 @@ static bool cdrom_tap_close_and_load(int tap_minor, const char *params, bool clo
     return false;
   if (close) {
     /* The last argument should be != 0 for force, but it's not supported */
-    printf("JED close %d\n", tap_ctl_close(tap->id, tap_minor, 0));
+    tap_ctl_close(tap->id, tap_minor, 0);
   }
-  printf("JED open %d\n", tap_ctl_open_flags(tap->id, tap_minor, params, TAPDISK_MESSAGE_FLAG_RDONLY));
+  tap_ctl_open_flags(tap->id, tap_minor, params, TAPDISK_MESSAGE_FLAG_RDONLY);
   tap_ctl_free_list(list);
 
   return true;
@@ -256,7 +253,6 @@ static bool cdrom_tap_destroy(int tap_minor)
   tap_ctl_list(&list);
   tmp = list;
   while(*tmp != NULL) {
-    printf("JED: trying %d vs %d\n", (*tmp)->minor, tap_minor);
     if ((*tmp)->minor == tap_minor) {
       tap = *tmp;
       break;
@@ -265,7 +261,7 @@ static bool cdrom_tap_destroy(int tap_minor)
   }
   if (tap == NULL)
     return false;
-  printf("JED destroy %d\n", tap_ctl_destroy(tap->id, tap_minor));
+  tap_ctl_destroy(tap->id, tap_minor);
   tap_ctl_free_list(list);
 
   return true;
@@ -331,14 +327,13 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
     return TRUE;
 
   /* See if there's other guests using the tapdev (we already ejected it) */
-  count = cdrom_count_and_print(tap_minor, 1, true);
+  count = cdrom_count_and_print(tap_minor, 1, false);
 
   /* This should never happen */
   if (count < 0) {
     printf("wha?!\n");
     return FALSE;
   }
-  printf("JED: count for %d: %d\n", tap_minor, count);
 
   /* Inserting the new iso */
 
@@ -359,10 +354,8 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
   snprintf(path, sizeof(path), "aio:%s", IN_path);
   if (count == 0) {
     /* 2. We're the only one to use it, we can reuse the tapdev */
-    if (cdrom_tap_close_and_load(tap_minor, path, true)) {
-      printf("JED: closed and loaded %d %s\n", tap_minor, path);
+    if (cdrom_tap_close_and_load(tap_minor, path, true))
       cdrom_change(IN_domid, vdev, IN_path, "phy", NULL);
-    }
   } else {
     /* 3. We need to create a new tapdev */
     if (tap_ctl_create_flags(path, &new_tpath, TAPDISK_MESSAGE_FLAG_RDONLY) != 0)
