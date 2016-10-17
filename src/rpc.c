@@ -128,7 +128,7 @@ static int cdrom_count_and_print(int tap_minor, int max, bool print)
   return res;
 }
 
-static void recreate(int domid, int vdev, const char *params, const char *type, const char *physical)
+static void recreate(int domid, int vdev, const char *params, const char *type, const char *physical, const char *tapdisk_params)
 {
   xs_transaction_t trans;
 
@@ -184,6 +184,7 @@ static void recreate(int domid, int vdev, const char *params, const char *type, 
     xenstore_be_write(trans, domid, vdev, "mode",            "r");
     xenstore_be_write(trans, domid, vdev, "frontend-id",     "%d", domid);
     xenstore_be_write(trans, domid, vdev, "dev",             "hdc");
+    xenstore_be_write(trans, domid, vdev, "tapdisk-params",  tapdisk_params);
 
     xenstore_mkdir_with_perms(trans, domid, 0, VBD_FRONTEND_FORMAT, domid, vdev);
     xenstore_fe_write(trans, domid, vdev, "state",           "1");
@@ -338,6 +339,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
   /* Inserting the new iso */
 
   /* 1.: is there already a tapdev for that iso?? */
+  snprintf(path, sizeof(path), "aio:%s", IN_path);
   existing = find_tap_with_path(IN_path);
   if (existing >= 0)
     {
@@ -347,11 +349,10 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
       /* Switch to the one we just found */
       snprintf(path, sizeof(path), "/dev/xen/blktap-2/tapdev%d", existing);
       snprintf(phys, sizeof(phys), "fe:%d", existing);
-      recreate(IN_domid, vdev, path, "phy", phys);
+      recreate(IN_domid, vdev, path, "phy", phys, path);
       return TRUE;
     }
 
-  snprintf(path, sizeof(path), "aio:%s", IN_path);
   if (count == 0) {
     /* 2. We're the only one to use it, we can reuse the tapdev */
     if (cdrom_tap_close_and_load(tap_minor, path, true))
@@ -362,7 +363,7 @@ gboolean cdrom_daemon_change_iso(CdromDaemonObject *this,
       printf("tap_ctl_create_flags failed!!");
     tap_minor = strtol(new_tpath + 24, NULL, 10);
     snprintf(phys, sizeof(phys), "fe:%d", tap_minor);
-    recreate(IN_domid, vdev, new_tpath, "phy", phys);
+    recreate(IN_domid, vdev, new_tpath, "phy", phys, path);
   }
 
   return TRUE;
