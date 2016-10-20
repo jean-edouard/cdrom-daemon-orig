@@ -108,6 +108,8 @@ bool  xenstore_be_destroy(xs_transaction_t trans, int domid, int vdev);
 bool  xenstore_fe_destroy(xs_transaction_t trans, int domid, int vdev);
 bool  xenstore_mkdir_with_perms(xs_transaction_t trans, int owner, int reader, char *dir, ...);
 
+bool blktap_change_iso(const char *path, int domid);
+
 void rpc_init(void);
 
 #endif

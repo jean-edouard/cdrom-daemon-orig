@@ -26,7 +26,7 @@ INCLUDES = @DBUS_CFLAGS@ @DBUS_GLIB_CFLAGS@ @LIBXCDBUS_INC@
 
 sbin_PROGRAMS = cdrom-daemon
 
-PROTO_SRCS = main.c rpc.c xenstore.c
+PROTO_SRCS = main.c rpc.c xenstore.c blktap.c atapi.c
 
 cdrom_daemon_SOURCES = ${PROTO_SRCS} rpcgen/cdrom_daemon_server_obj.c
 
